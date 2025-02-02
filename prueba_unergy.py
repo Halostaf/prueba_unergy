@@ -9,7 +9,6 @@ import sqlite3
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
-import json
 
 start_date = datetime.strptime("15-03-2024 00:00:00", "%d-%m-%Y %H:%M:%S")
 end_date = datetime.strptime("15-04-2024 00:00:00", "%d-%m-%Y %H:%M:%S")
@@ -25,21 +24,23 @@ else:
     print("Error al obtener los datos", response.status_code)
     exit()
     
-# Extraer el diccionario "data" y separarlo
+# Extraer el diccionario data (diccionario) y separarlo
 precios_data = data["data"]
 
 # Convertir el diccionario en una lista de tuplas (fecha, hora, precio)
+# Convierte las hotas de 24:00 a 00:00 mientras lo recorre
 lista_precios = [
     (fecha,"00:00" if hora == "24:00" else hora, precio)
     for fecha, horas in precios_data.items()
     for hora, precio in horas.items()
 ]
 
-# Crear un DataFrame
-df = pd.DataFrame(lista_precios, columns=["Fecha", "Hora", "Precio"])
-df = df.sort_values(by=["Fecha", "Hora"])  # Ordenar por fecha y hora
+# Crearmos el DataFrame
+df = pd.DataFrame(lista_precios, columns=["Fecha", "Hora", "Precio"]) 
+# Ordenar por fecha y hora
+df = df.sort_values(by=["Fecha", "Hora"]) 
 
-# Fusionar "Fecha" y "Hora" en una columna datetime
+# Fusionamos Fecha y Hora en una columna datetime
 df["Datetime"] = pd.to_datetime(df["Fecha"] + " " + df["Hora"], format="%Y-%m-%d %H:%M")
 
 # Crear una lista con todas las fechas y horas dentro del rango
@@ -48,12 +49,15 @@ full_df = pd.DataFrame({"Datetime": all_dates})
 
 # Identificar valores faltantes antes del tratamiento
 def identificar_faltantes(df, full_df):
+    # merge ayuda a verificar los datos que hayan en los 2 dataframe, uno
+    # se encuentra con toda las fechas del rango y otra con las obtenidas en la api
+    # se comparan y se fusionan teniendo en cuenta que habian datos faltantes
     merged_df = full_df.merge(df, on="Datetime", how="left", indicator=True)
     missing_data = merged_df[merged_df["_merge"] == "left_only"]["Datetime"]
     print("Valores faltantes antes del tratamiento de datos:")
     print(missing_data.dt.strftime("%Y-%m-%d %H:%M").tolist())
     return missing_data
-
+# Aqui se imprimen los dias faltantes
 faltantes = identificar_faltantes(df, full_df)
 
 # Unir con los datos originales
@@ -64,16 +68,20 @@ df["Precio"] = df["Precio"].ffill()
 
 # Función para rellenar los días faltantes con el promedio de los 3 días anterioress y posteriores
 def dias_faltantes(df):
-    df["Fecha"] = df["Datetime"].dt.date  # Extraer solo la fecha
-    unique_dates = df["Fecha"].unique()
+    df["Fecha"] = df["Datetime"].dt.date  # Extraer solo la fecha (Sin la hora)
+    unique_dates = df["Fecha"].unique() # Lisra de fechas en el dataframe
     
     for date in unique_dates:
         day_data = df[df["Fecha"] == date]
         
-        if day_data["Precio"].isna().all():  # Si todo el día está vacío
+        if day_data["Precio"].isna().all():  # Si ¿todo el día está vacío?
             prev_days = df[(df["Fecha"] >= date - timedelta(days=3)) & (df["Fecha"] < date)]["Precio"]
             next_days = df[(df["Fecha"] > date) & (df["Fecha"] <= date + timedelta(days=3))]["Precio"]
+            
+            # Calcula los promedios
             mean_value = pd.concat([prev_days, next_days]).mean()
+            
+            # Rellena los datos
             df.loc[df["Fecha"] == date, "Precio"] = mean_value
     
     return df
@@ -82,7 +90,7 @@ df = dias_faltantes(df)
 
 # Calcular el promedio diario de precios
 df["Fecha"] = df["Datetime"].dt.strftime("%Y-%m-%d")
-promedio_diario = df.groupby("Fecha")["Precio"].mean().reset_index()
+promedio_diario = df.groupby("Fecha")["Precio"].mean().reset_index() # Agrupa por fecha para calcular el promedio
 promedio_diario.rename(columns={"Precio": "Promedio_Diario"}, inplace=True)
 
 # Calcular el promedio móvil de 7 días
@@ -130,7 +138,7 @@ c.execute('''
     )
 ''')
 
-# Insertar los datos en la tabla
+# Insertar los datos en la tabla iterando filas
 for index, row in promedio_diario.iterrows():
     c.execute('''
         INSERT INTO precios_diarios (fecha, precio_promedio, precio_7d)
@@ -145,4 +153,3 @@ conn.commit()
 conn.close()
 
 print("Los resultados han sido almacenados en la base de datos SQLite 'precios.db'.")
-
